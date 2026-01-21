@@ -1,43 +1,36 @@
 /* eslint-disable no-undef */
-
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const bodyParser = require("body-parser");
+const cors = require("cors");
 
 const app = express();
 const server = http.createServer(app);
-const cors = require("cors");
 
+// REST CORS
+app.use(cors({
+  origin: [
+    "https://realtime-video-app-frontend.vercel.app", // production frontend
+    "http://localhost:5173" // local dev
+  ],
+  methods: ["GET","POST"],
+  credentials: true
+}));
 app.use(express.json());
-app.use(bodyParser.json());
 
-// CORS for REST endpoints
-app.use(
-  cors({
-    origin: [
-      "https://realtime-video-app-frontend.vercel.app", // production frontend
-      "http://localhost:5173", // optional: local frontend for testing
-    ],
-    methods: ["GET", "POST"],
-    credentials: true,
-  })
-);
-
-// ---------- Socket.IO ----------
+// Socket.IO
 const io = new Server(server, {
   cors: {
     origin: [
       "https://realtime-video-app-frontend.vercel.app",
-      "http://localhost:5173", // optional: local frontend
+      "http://localhost:5173"
     ],
-    methods: ["GET", "POST"],
-    credentials: true,
+    methods: ["GET","POST"],
+    credentials: true
   },
+  transports: ["polling","websocket"] // allow fallback
 });
-
-
 
 const emailSockettoMapping = new Map();
 const socketToEmailMapping = new Map();
