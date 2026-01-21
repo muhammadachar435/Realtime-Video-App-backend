@@ -12,12 +12,31 @@ const server = http.createServer(app);
 app.use(express.json());
 app.use(bodyParser.json());
 
+// CORS for REST endpoints
+app.use(
+  cors({
+    origin: [
+      "https://realtime-video-app-frontend.vercel.app", // production frontend
+      "http://localhost:5173", // optional: local frontend for testing
+    ],
+    methods: ["GET", "POST"],
+    credentials: true,
+  })
+);
+
+// ---------- Socket.IO ----------
 const io = new Server(server, {
   cors: {
-    origin: "*", // or your frontend URL
+    origin: [
+      "https://realtime-video-app-frontend.vercel.app",
+      "http://localhost:5173", // optional: local frontend
+    ],
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
+
+
 
 const emailSockettoMapping = new Map();
 const socketToEmailMapping = new Map();
