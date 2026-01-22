@@ -1,9 +1,7 @@
-/* eslint-disable no-undef */
 require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const bodyParser = require("body-parser");
 const cors = require("cors");
 
 const app = express();
@@ -11,51 +9,45 @@ const server = http.createServer(app);
 
 // Enable CORS
 app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "OPTIONS"],
+  origin: function(origin, callback) {
+    const allowedOrigins = [
+      "http://localhost:5173",
+      "https://realtime-video-app-frontend.vercel.app" // REPLACE WITH YOUR VERCEL URL
+    ];
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true
 }));
 
 app.use(express.json());
-app.use(bodyParser.json());
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: [
+      "http://localhost:5173",
+      "https://realtime-video-app-frontend.vercel.app" // REPLACE WITH YOUR VERCEL URL
+    ],
     methods: ["GET", "POST"],
     credentials: true
   },
   transports: ['websocket', 'polling'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  maxHttpBufferSize: 1e8
+  allowUpgrades: true,
 });
 
 const emailSockettoMapping = new Map();
 const socketToEmailMapping = new Map();
 
-// Helper function to get user info
-const getUserInfo = (socketId) => {
-  return socketToEmailMapping.get(socketId) || { emailId: 'unknown', name: 'Guest' };
-};
-
-// connection built
 io.on("connection", (socket) => {
-  console.log("✅ New Connection:", socket.id);
-
-  // Heartbeat to keep connection alive
-  socket.on("ping", (cb) => {
-    if (typeof cb === "function") {
-      cb();
-    }
-  });
+  console.log("New Connection: ", socket.id);
 
   socket.on("join-room", (data) => {
     const { roomId, emailId, name } = data;
 
     if (!roomId || !emailId || !name) {
-      socket.emit("error", { message: "Missing required fields" });
       return;
     }
 
@@ -65,31 +57,35 @@ io.on("connection", (socket) => {
 
     // Join room
     socket.join(roomId);
-    console.log(`👤 ${name} (${emailId}) joined room ${roomId}`);
 
-    // Get all users in room
-    const room = io.sockets.adapter.rooms.get(roomId);
-    const usersInRoom = room ? Array.from(room).map(id => getUserInfo(id)) : [];
+    // Get users in room
+    const roomSockets = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
+    const usersInRoom = roomSockets.map(id => {
+      const user = socketToEmailMapping.get(id);
+      return user ? { emailId: user.emailId, name: user.name, socketId: id } : null;
+    }).filter(Boolean);
+
+    // Send room info to all
+    io.to(roomId).emit("room-users", { users: usersInRoom });
 
     // Notify existing users about new user
-    socket.to(roomId).emit("user-joined", { 
-      emailId, 
-      name, 
-      socketId: socket.id 
-    });
-
-    // Send existing users to new user
     usersInRoom.forEach(user => {
-      if (user.emailId !== emailId) {
-        socket.emit("user-joined", {
-          emailId: user.emailId,
-          name: user.name,
-          socketId: emailSockettoMapping.get(user.emailId)
+      if (user.socketId !== socket.id) {
+        io.to(user.socketId).emit("user-joined", { 
+          emailId, 
+          name, 
+          socketId: socket.id 
         });
       }
     });
 
-    // Notify self
+    // Send existing users to new user
+    usersInRoom.forEach(user => {
+      if (user.socketId !== socket.id) {
+        socket.emit("user-joined", user);
+      }
+    });
+
     socket.emit("joined-room", {
       roomId,
       emailId,
@@ -97,59 +93,45 @@ io.on("connection", (socket) => {
       socketId: socket.id,
     });
 
-    console.log(`Room ${roomId} now has ${usersInRoom.length + 1} users`);
+    console.log(`User ${emailId} joined room ${roomId}, Total: ${roomSockets.length}`);
   });
 
   // Call user handler
-  socket.on("call-user", ({ emailId, offer, fromEmail, fromName }) => {
+  socket.on("call-user", ({ emailId, offer }) => {
     const toSocketId = emailSockettoMapping.get(emailId);
-    console.log(`📞 Call from ${fromEmail} (${socket.id}) to ${emailId} (${toSocketId})`);
+    const callerEmail = socketToEmailMapping.get(socket.id);
+
+    console.log(`Call from ${callerEmail.emailId} to ${emailId}`);
 
     if (toSocketId) {
       io.to(toSocketId).emit("incoming-call", {
         from: socket.id,
-        fromEmail: fromEmail,
-        fromName: fromName,
+        fromEmail: callerEmail.emailId,
+        fromName: callerEmail.name,
         offer,
       });
-      console.log(`📞 Call forwarded to ${toSocketId}`);
     } else {
-      console.log(`❌ User ${emailId} not found`);
       socket.emit("user-not-found", { emailId });
     }
   });
 
   // call-accepted
-  socket.on("call-accepted", ({ to, ans, fromEmail, fromName }) => {
-    const user = getUserInfo(socket.id);
-    console.log(`✅ Call accepted by ${user.emailId} (${socket.id}) to ${to}`);
-    
-    if (io.sockets.sockets.has(to)) {
-      io.to(to).emit("call-accepted", {
-        ans,
-        from: socket.id,
-        fromEmail: user.emailId,
-        fromName: user.name,
-      });
-      console.log(`✅ Call accepted sent to ${to}`);
-    } else {
-      console.log(`❌ Target socket ${to} not found for call-accepted`);
-    }
+  socket.on("call-accepted", ({ to, ans }) => {
+    const user = socketToEmailMapping.get(socket.id);
+    io.to(to).emit("call-accepted", {
+      ans,
+      from: socket.id,
+      fromEmail: user.emailId,
+      fromName: user.name,
+    });
   });
 
-  // ICE Candidate exchange - CRITICAL FIX
+  // ICE Candidate exchange
   socket.on("ice-candidate", ({ to, candidate }) => {
-    console.log(`🧊 ICE candidate from ${socket.id} to ${to}`);
-    
-    if (io.sockets.sockets.has(to)) {
-      io.to(to).emit("ice-candidate", {
-        candidate,
-        from: socket.id,
-      });
-      console.log(`✅ ICE candidate sent to ${to}`);
-    } else {
-      console.log(`❌ Target socket ${to} not found for ICE candidate`);
-    }
+    io.to(to).emit("ice-candidate", {
+      candidate,
+      from: socket.id,
+    });
   });
 
   socket.on("camera-toggle", ({ cameraOn, roomId }) => {
@@ -158,94 +140,49 @@ io.on("connection", (socket) => {
 
   // Chat-message
   socket.on("chat-message", ({ roomId, from, text }) => {
-    const sender = getUserInfo(from);
-    
+    const sender = socketToEmailMapping.get(from);
     socket.to(roomId).emit("chat-message", {
       from,
       text,
-      senderName: sender.name,
-      senderEmail: sender.emailId
+      senderName: sender?.name || "Guest",
     });
   });
 
-  // Leave room
-  socket.on("leave-room", ({ roomId }) => {
-    const user = getUserInfo(socket.id);
-    if (user) {
-      console.log(`👋 ${user.name} left room ${roomId}`);
-      socket.to(roomId).emit("user-left", {
-        emailId: user.emailId,
-        socketId: socket.id,
-        name: user.name
-      });
-    }
-    socket.leave(roomId);
-  });
-
   // Disconnect handler
-  socket.on("disconnect", (reason) => {
-    const user = getUserInfo(socket.id);
+  socket.on("disconnect", () => {
+    const user = socketToEmailMapping.get(socket.id);
     if (user) {
-      const { emailId, name } = user;
+      const { emailId } = user;
       emailSockettoMapping.delete(emailId);
-      
-      console.log(`❌ Disconnected: ${name} (${emailId}), Reason: ${reason}`);
-      
-      // Notify all rooms user was in
+
+      // Notify all rooms this user was in
       socket.rooms.forEach(roomId => {
         socket.to(roomId).emit("user-left", {
           emailId,
           socketId: socket.id,
-          name
         });
+        
+        const roomCount = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+        io.to(roomId).emit("room-update", { count: roomCount });
       });
+      
+      console.log(`User disconnected: ${emailId} (${socket.id})`);
     }
     socketToEmailMapping.delete(socket.id);
-  });
-
-  // Error handler
-  socket.on("error", (error) => {
-    console.error(`❌ Socket error for ${socket.id}:`, error);
   });
 });
 
 // Health check endpoint
-app.get("/", (req, res) => {
+app.get("/", (req, res) => res.send("Backend is Running!"));
+app.get("/status", (req, res) => {
   res.json({
     status: "active",
-    timestamp: new Date().toISOString(),
     connections: io.engine.clientsCount,
-    uptime: process.uptime()
-  });
-});
-
-// WebRTC configuration endpoint
-app.get("/config", (req, res) => {
-  res.json({
-    iceServers: [
-      {
-        urls: [
-          "stun:stun.l.google.com:19302",
-          "stun:global.stun.twilio.com:3478"
-        ]
-      },
-      {
-        urls: "turn:openrelay.metered.ca:80",
-        username: "openrelayproject",
-        credential: "openrelayproject"
-      },
-      {
-        urls: "turn:openrelay.metered.ca:443",
-        username: "openrelayproject",
-        credential: "openrelayproject"
-      }
-    ]
+    users: Array.from(emailSockettoMapping.keys()),
   });
 });
 
 const PORT = process.env.PORT || 5001;
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 WebSocket server ready`);
-  console.log(`🌐 Access at: http://localhost:${PORT}`);
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
