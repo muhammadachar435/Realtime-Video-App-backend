@@ -101,19 +101,18 @@ io.on("connection", (socket) => {
   });
 
   // Call user handler
-  socket.on("call-user", ({ emailId, offer }) => {
+  socket.on("call-user", ({ emailId, offer, fromEmail, fromName }) => {
     const toSocketId = emailSockettoMapping.get(emailId);
-    const caller = getUserInfo(socket.id);
-
-    console.log(`📞 Call from ${caller.emailId} to ${emailId}`);
+    console.log(`📞 Call from ${fromEmail} (${socket.id}) to ${emailId} (${toSocketId})`);
 
     if (toSocketId) {
       io.to(toSocketId).emit("incoming-call", {
         from: socket.id,
-        fromEmail: caller.emailId,
-        fromName: caller.name,
+        fromEmail: fromEmail,
+        fromName: fromName,
         offer,
       });
+      console.log(`📞 Call forwarded to ${toSocketId}`);
     } else {
       console.log(`❌ User ${emailId} not found`);
       socket.emit("user-not-found", { emailId });
@@ -123,17 +122,22 @@ io.on("connection", (socket) => {
   // call-accepted
   socket.on("call-accepted", ({ to, ans, fromEmail, fromName }) => {
     const user = getUserInfo(socket.id);
-    console.log(`✅ Call accepted by ${user.emailId} to ${to}`);
+    console.log(`✅ Call accepted by ${user.emailId} (${socket.id}) to ${to}`);
     
-    io.to(to).emit("call-accepted", {
-      ans,
-      from: socket.id,
-      fromEmail: user.emailId,
-      fromName: user.name,
-    });
+    if (io.sockets.sockets.has(to)) {
+      io.to(to).emit("call-accepted", {
+        ans,
+        from: socket.id,
+        fromEmail: user.emailId,
+        fromName: user.name,
+      });
+      console.log(`✅ Call accepted sent to ${to}`);
+    } else {
+      console.log(`❌ Target socket ${to} not found for call-accepted`);
+    }
   });
 
-  // ICE Candidate exchange
+  // ICE Candidate exchange - CRITICAL FIX
   socket.on("ice-candidate", ({ to, candidate }) => {
     console.log(`🧊 ICE candidate from ${socket.id} to ${to}`);
     
@@ -142,8 +146,9 @@ io.on("connection", (socket) => {
         candidate,
         from: socket.id,
       });
+      console.log(`✅ ICE candidate sent to ${to}`);
     } else {
-      console.log(`❌ Target socket ${to} not found`);
+      console.log(`❌ Target socket ${to} not found for ICE candidate`);
     }
   });
 
@@ -171,6 +176,7 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("user-left", {
         emailId: user.emailId,
         socketId: socket.id,
+        name: user.name
       });
     }
     socket.leave(roomId);
