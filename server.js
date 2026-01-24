@@ -12,7 +12,7 @@ app.use(cors({
   origin: function(origin, callback) {
     const allowedOrigins = [
       "http://localhost:5173",
-      "https://realtime-video-app-frontend.vercel.app" // REPLACE WITH YOUR VERCEL URL
+      "https://realtime-video-app-frontend.vercel.app"
     ];
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
@@ -29,7 +29,7 @@ const io = new Server(server, {
   cors: {
     origin: [
       "http://localhost:5173",
-      "https://realtime-video-app-frontend.vercel.app" // REPLACE WITH YOUR VERCEL URL
+      "https://realtime-video-app-frontend.vercel.app"
     ],
     methods: ["GET", "POST"],
     credentials: true
@@ -148,6 +148,34 @@ io.on("connection", (socket) => {
     });
   });
 
+  // === ADD THIS LEAVE-ROOM HANDLER HERE ===
+  socket.on("leave-room", ({ roomId }) => {
+    console.log(`User ${socket.id} is leaving room ${roomId}`);
+    
+    // Get user info
+    const user = socketToEmailMapping.get(socket.id);
+    
+    // Notify other users in the room
+    socket.to(roomId).emit("user-left", {
+      emailId: user?.emailId,
+      socketId: socket.id,
+      reason: "User left the call"
+    });
+    
+    // Leave the room
+    socket.leave(roomId);
+    
+    // Update room count
+    const roomCount = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+    console.log(`Room ${roomId} now has ${roomCount} users`);
+    
+    // Send update to remaining users
+    io.to(roomId).emit("room-update", { 
+      count: roomCount,
+      message: "User left the room" 
+    });
+  });
+
   // Disconnect handler
   socket.on("disconnect", () => {
     const user = socketToEmailMapping.get(socket.id);
@@ -169,35 +197,6 @@ io.on("connection", (socket) => {
       console.log(`User disconnected: ${emailId} (${socket.id})`);
     }
     socketToEmailMapping.delete(socket.id);
-  });
-});
-
-
-// ADD THIS NEW EVENT HANDLER - BEFORE disconnect handler
-socket.on("leave-room", ({ roomId }) => {
-  console.log(`User ${socket.id} is leaving room ${roomId}`);
-  
-  // Get user info
-  const user = socketToEmailMapping.get(socket.id);
-  
-  // Notify other users in the room
-  socket.to(roomId).emit("user-left", {
-    emailId: user?.emailId,
-    socketId: socket.id,
-    reason: "User left the call"
-  });
-  
-  // Leave the room
-  socket.leave(roomId);
-  
-  // Update room count
-  const roomCount = io.sockets.adapter.rooms.get(roomId)?.size || 0;
-  console.log(`Room ${roomId} now has ${roomCount} users`);
-  
-  // Send update to remaining users
-  io.to(roomId).emit("room-update", { 
-    count: roomCount,
-    message: "User left the room" 
   });
 });
 
