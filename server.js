@@ -172,6 +172,35 @@ io.on("connection", (socket) => {
   });
 });
 
+
+// ADD THIS NEW EVENT HANDLER - BEFORE disconnect handler
+socket.on("leave-room", ({ roomId }) => {
+  console.log(`User ${socket.id} is leaving room ${roomId}`);
+  
+  // Get user info
+  const user = socketToEmailMapping.get(socket.id);
+  
+  // Notify other users in the room
+  socket.to(roomId).emit("user-left", {
+    emailId: user?.emailId,
+    socketId: socket.id,
+    reason: "User left the call"
+  });
+  
+  // Leave the room
+  socket.leave(roomId);
+  
+  // Update room count
+  const roomCount = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+  console.log(`Room ${roomId} now has ${roomCount} users`);
+  
+  // Send update to remaining users
+  io.to(roomId).emit("room-update", { 
+    count: roomCount,
+    message: "User left the room" 
+  });
+});
+
 // Health check endpoint
 app.get("/", (req, res) => res.send("Backend is Running!"));
 app.get("/status", (req, res) => {
